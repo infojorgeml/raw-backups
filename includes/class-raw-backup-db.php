@@ -29,10 +29,12 @@ class Raw_Backup_DB {
 	 * format WordPress Studio exports (DROP + CREATE + one INSERT per row).
 	 * Table names are normalized to the `wp_` prefix so the dump is portable.
 	 *
-	 * @param string $file Destination .sql path.
+	 * @param string $file       Destination .sql path.
+	 * @param array  $win        Optional progress window array( start, end ).
+	 * @param string $msg_prefix Optional prefix for progress messages.
 	 * @return true|WP_Error
 	 */
-	public static function dump_to_file( $file ) {
+	public static function dump_to_file( $file, $win = null, $msg_prefix = '' ) {
 		global $wpdb;
 
 		$fh = fopen( $file, 'w' );
@@ -57,8 +59,22 @@ class Raw_Backup_DB {
 			return new WP_Error( 'rawbk_dump_no_tables', 'No tables found for the current prefix.' );
 		}
 
-		foreach ( $tables as $table ) {
+		$table_total = count( $tables );
+		foreach ( $tables as $table_index => $table ) {
 			$normalized = 'wp_' . substr( $table, strlen( $prefix ) );
+
+			if ( $win ) {
+				Raw_Backup_Progress::update(
+					Raw_Backup_Progress::scale( $win, 100 * $table_index / $table_total ),
+					$msg_prefix . sprintf(
+						/* translators: 1: table name, 2: current table number, 3: total tables */
+						__( 'Exporting table %1$s (%2$d of %3$d)…', 'raw-backup' ),
+						$normalized,
+						$table_index + 1,
+						$table_total
+					)
+				);
+			}
 
 			$create_row = $wpdb->get_row( "SHOW CREATE TABLE `{$table}`", ARRAY_N );
 			if ( empty( $create_row[1] ) ) {
@@ -100,6 +116,11 @@ class Raw_Backup_DB {
 					fwrite( $fh, "INSERT INTO `{$normalized}` VALUES ({$values});\n" );
 				}
 				$offset += self::ROW_BATCH;
+
+				if ( $win ) {
+					$table_fraction = ( $table_index + min( 1, $offset / $count ) ) / $table_total;
+					Raw_Backup_Progress::update( Raw_Backup_Progress::scale( $win, 100 * $table_fraction ) );
+				}
 			}
 			fwrite( $fh, "\n" );
 		}
@@ -113,15 +134,18 @@ class Raw_Backup_DB {
 	 * multi-line statements, quoted strings with escapes and `--` comments.
 	 *
 	 * @param string $file Path to the .sql file.
+	 * @param array  $win  Optional progress window array( start, end ).
 	 * @return array|WP_Error { executed: int, failed: int, errors: string[] }
 	 */
-	public static function import_file( $file ) {
+	public static function import_file( $file, $win = null ) {
 		global $wpdb;
 
 		$fh = fopen( $file, 'r' );
 		if ( ! $fh ) {
 			return new WP_Error( 'rawbk_import_open', sprintf( 'Could not open %s for reading.', $file ) );
 		}
+		$file_size = max( 1, (int) filesize( $file ) );
+		$line_no   = 0;
 
 		$stmt        = '';
 		$in_str      = null;
@@ -149,6 +173,13 @@ class Raw_Backup_DB {
 		};
 
 		while ( false !== ( $line = fgets( $fh ) ) ) {
+			$line_no++;
+			if ( $win && 0 === $line_no % 400 ) {
+				Raw_Backup_Progress::update(
+					Raw_Backup_Progress::scale( $win, 100 * ftell( $fh ) / $file_size ),
+					__( 'Importing database…', 'raw-backup' )
+				);
+			}
 			if ( null === $in_str && '' === trim( $stmt ) ) {
 				$trimmed = ltrim( $line );
 				if ( '' === trim( $line ) || 0 === strpos( $trimmed, '--' ) ) {
@@ -267,9 +298,10 @@ class Raw_Backup_DB {
 	 *
 	 * @param string $search  Needle.
 	 * @param string $replace Replacement.
+	 * @param array  $win     Optional progress window array( start, end ).
 	 * @return int
 	 */
-	public static function search_replace( $search, $replace ) {
+	public static function search_replace( $search, $replace, $win = null ) {
 		global $wpdb;
 
 		if ( '' === $search || $search === $replace ) {
@@ -277,11 +309,22 @@ class Raw_Backup_DB {
 		}
 
 		$updated = 0;
-		$tables  = (array) $wpdb->get_col( 'SHOW TABLES' );
+		$prefix  = $wpdb->prefix;
+		$tables  = array_values(
+			array_filter(
+				(array) $wpdb->get_col( 'SHOW TABLES' ),
+				function ( $table ) use ( $prefix ) {
+					return 0 === strpos( $table, $prefix );
+				}
+			)
+		);
 
-		foreach ( $tables as $table ) {
-			if ( 0 !== strpos( $table, $wpdb->prefix ) ) {
-				continue;
+		foreach ( $tables as $table_index => $table ) {
+			if ( $win ) {
+				Raw_Backup_Progress::update(
+					Raw_Backup_Progress::scale( $win, 100 * $table_index / max( 1, count( $tables ) ) ),
+					__( 'Rewriting URLs…', 'raw-backup' )
+				);
 			}
 
 			$columns   = $wpdb->get_results( "SHOW COLUMNS FROM `{$table}`", ARRAY_A );

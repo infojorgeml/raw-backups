@@ -15,13 +15,21 @@ class Raw_Backup_Importer {
 	 * Run a full import.
 	 *
 	 * @param string $zip_path Absolute path to the backup ZIP.
+	 * @param array  $win      Optional progress window array( start, end ).
 	 * @return array|WP_Error Summary of what was done.
 	 */
-	public static function run( $zip_path ) {
+	public static function run( $zip_path, $win = null ) {
 		global $wpdb;
 
 		@set_time_limit( 0 );
 		wp_raise_memory_limit( 'admin' );
+
+		$win = $win ? $win : array( 0, 100 );
+		Raw_Backup_Progress::update(
+			Raw_Backup_Progress::scale( $win, 1 ),
+			__( 'Extracting archive…', 'raw-backup' ),
+			true
+		);
 
 		$summary = array(
 			'files_copied'  => false,
@@ -50,6 +58,11 @@ class Raw_Backup_Importer {
 			return $unzipped;
 		}
 
+		Raw_Backup_Progress::update(
+			Raw_Backup_Progress::scale( $win, 12 ),
+			__( 'Validating backup…', 'raw-backup' ),
+			true
+		);
 		$root = self::locate_root( $tmp );
 		if ( ! $root ) {
 			rawbk_rrmdir( $tmp );
@@ -61,7 +74,10 @@ class Raw_Backup_Importer {
 
 		// 2) Files.
 		if ( is_dir( $root . '/wp-content' ) ) {
-			$copied = self::import_wp_content( $root . '/wp-content' );
+			$copied = self::import_wp_content(
+				$root . '/wp-content',
+				array( Raw_Backup_Progress::scale( $win, 14 ), Raw_Backup_Progress::scale( $win, 35 ) )
+			);
 			if ( is_wp_error( $copied ) ) {
 				rawbk_rrmdir( $tmp );
 				return $copied;
@@ -73,8 +89,15 @@ class Raw_Backup_Importer {
 		$sql_files = glob( $root . '/sql/*.sql' );
 		if ( $sql_files ) {
 			sort( $sql_files );
-			foreach ( $sql_files as $sql_file ) {
-				$result = Raw_Backup_DB::import_file( $sql_file );
+			$sql_total = count( $sql_files );
+			foreach ( $sql_files as $sql_index => $sql_file ) {
+				$result = Raw_Backup_DB::import_file(
+					$sql_file,
+					array(
+						Raw_Backup_Progress::scale( $win, 35 + 40 * $sql_index / $sql_total ),
+						Raw_Backup_Progress::scale( $win, 35 + 40 * ( $sql_index + 1 ) / $sql_total ),
+					)
+				);
 				if ( is_wp_error( $result ) ) {
 					rawbk_rrmdir( $tmp );
 					return $result;
@@ -84,6 +107,11 @@ class Raw_Backup_Importer {
 				$summary['db_errors']      = array_merge( $summary['db_errors'], $result['errors'] );
 			}
 
+			Raw_Backup_Progress::update(
+				Raw_Backup_Progress::scale( $win, 76 ),
+				__( 'Adjusting tables…', 'raw-backup' ),
+				true
+			);
 			$renamed = Raw_Backup_DB::rename_prefix( $target_prefix );
 			if ( is_wp_error( $renamed ) ) {
 				rawbk_rrmdir( $tmp );
@@ -106,18 +134,33 @@ class Raw_Backup_Importer {
 			if ( $imported_siteurl && $imported_siteurl !== $target_siteurl && ! isset( $pairs[ $imported_siteurl ] ) ) {
 				$pairs[ $imported_siteurl ] = $target_siteurl;
 			}
+			$replacements = array();
 			foreach ( $pairs as $from => $to ) {
-				$summary['urls_replaced'] += Raw_Backup_DB::search_replace( $from, $to );
+				$replacements[] = array( $from, $to );
 				// JSON-escaped variant (e.g. inside block attributes or LinkControl data).
 				if ( false !== strpos( $from, '/' ) ) {
-					$summary['urls_replaced'] += Raw_Backup_DB::search_replace(
-						str_replace( '/', '\/', $from ),
-						str_replace( '/', '\/', $to )
-					);
+					$replacements[] = array( str_replace( '/', '\/', $from ), str_replace( '/', '\/', $to ) );
 				}
+			}
+			$ops_total = max( 1, count( $replacements ) );
+			foreach ( $replacements as $op_index => $op ) {
+				$summary['urls_replaced'] += Raw_Backup_DB::search_replace(
+					$op[0],
+					$op[1],
+					array(
+						Raw_Backup_Progress::scale( $win, 80 + 16 * $op_index / $ops_total ),
+						Raw_Backup_Progress::scale( $win, 80 + 16 * ( $op_index + 1 ) / $ops_total ),
+					)
+				);
 			}
 			$summary['url_from'] = $imported_home ? $imported_home : '';
 			$summary['url_to']   = $target_home;
+
+			Raw_Backup_Progress::update(
+				Raw_Backup_Progress::scale( $win, 97 ),
+				__( 'Flushing caches…', 'raw-backup' ),
+				true
+			);
 
 			// Belt and braces: enforce the current URLs and let WP rebuild rewrites.
 			$options_table = $target_prefix . 'options';
@@ -155,9 +198,10 @@ class Raw_Backup_Importer {
 	 * skipping paths that must never be replaced at runtime.
 	 *
 	 * @param string $source Extracted wp-content directory.
+	 * @param array  $win    Optional progress window array( start, end ).
 	 * @return true|WP_Error
 	 */
-	private static function import_wp_content( $source ) {
+	private static function import_wp_content( $source, $win = null ) {
 		$source  = untrailingslashit( $source );
 		$exclude = array(
 			$source . '/plugins/' . dirname( RAW_BACKUP_BASENAME ), // Never overwrite the running plugin.
@@ -168,7 +212,41 @@ class Raw_Backup_Importer {
 			$source . '/advanced-cache.php',
 		);
 
-		return rawbk_copy_dir( $source, untrailingslashit( WP_CONTENT_DIR ), $exclude );
+		$on_file = null;
+		if ( $win && Raw_Backup_Progress::active() ) {
+			$total = 0;
+			$iter  = new RecursiveIteratorIterator(
+				new RecursiveDirectoryIterator( $source, FilesystemIterator::SKIP_DOTS )
+			);
+			foreach ( $iter as $item ) {
+				if ( ! $item->isDir() ) {
+					$total++;
+				}
+			}
+			$total   = max( 1, $total );
+			$done    = 0;
+			$on_file = function () use ( &$done, $total, $win ) {
+				$done++;
+				if ( 0 === $done % 50 ) {
+					Raw_Backup_Progress::update(
+						Raw_Backup_Progress::scale( $win, 100 * $done / $total ),
+						sprintf(
+							/* translators: 1: files copied, 2: total files */
+							__( 'Copying files (%1$s of %2$s)…', 'raw-backup' ),
+							number_format_i18n( $done ),
+							number_format_i18n( $total )
+						)
+					);
+				}
+			};
+			Raw_Backup_Progress::update(
+				Raw_Backup_Progress::scale( $win, 0 ),
+				__( 'Copying files…', 'raw-backup' ),
+				true
+			);
+		}
+
+		return rawbk_copy_dir( $source, untrailingslashit( WP_CONTENT_DIR ), $exclude, $on_file );
 	}
 
 	/**

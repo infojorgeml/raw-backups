@@ -56,12 +56,13 @@ function rawbk_rrmdir( $dir ) {
 /**
  * Recursively copy a directory, skipping excluded source paths.
  *
- * @param string   $from    Source directory.
- * @param string   $to      Destination directory.
- * @param string[] $exclude Absolute source paths (files or dirs) to skip.
+ * @param string        $from    Source directory.
+ * @param string        $to      Destination directory.
+ * @param string[]      $exclude Absolute source paths (files or dirs) to skip.
+ * @param callable|null $on_file Called once per copied file.
  * @return true|WP_Error
  */
-function rawbk_copy_dir( $from, $to, $exclude = array() ) {
+function rawbk_copy_dir( $from, $to, $exclude = array(), $on_file = null ) {
 	$from = untrailingslashit( $from );
 	$to   = untrailingslashit( $to );
 
@@ -89,7 +90,7 @@ function rawbk_copy_dir( $from, $to, $exclude = array() ) {
 		}
 
 		if ( is_dir( $src ) ) {
-			$result = rawbk_copy_dir( $src, $dst, $exclude );
+			$result = rawbk_copy_dir( $src, $dst, $exclude, $on_file );
 			if ( is_wp_error( $result ) ) {
 				closedir( $handle );
 				return $result;
@@ -97,6 +98,8 @@ function rawbk_copy_dir( $from, $to, $exclude = array() ) {
 		} elseif ( ! copy( $src, $dst ) ) {
 			closedir( $handle );
 			return new WP_Error( 'rawbk_copy_failed', sprintf( 'Could not copy file: %s', $src ) );
+		} elseif ( $on_file ) {
+			call_user_func( $on_file );
 		}
 	}
 	closedir( $handle );

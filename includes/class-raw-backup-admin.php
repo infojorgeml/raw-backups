@@ -18,6 +18,7 @@ class Raw_Backup_Admin {
 		add_action( 'admin_post_rawbk_import', array( __CLASS__, 'handle_import' ) );
 		add_action( 'admin_post_rawbk_download', array( __CLASS__, 'handle_download' ) );
 		add_action( 'admin_post_rawbk_delete', array( __CLASS__, 'handle_delete' ) );
+		add_action( 'wp_ajax_rawbk_progress', array( __CLASS__, 'handle_progress' ) );
 	}
 
 	public static function register_menu() {
@@ -52,13 +53,24 @@ class Raw_Backup_Admin {
 				.rawbk-warning { color: #b32d2e; }
 				.rawbk-actions form { display: inline; }
 				.rawbk-table td, .rawbk-table th { vertical-align: middle; }
+				#rawbk-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 100000; align-items: center; justify-content: center; }
+				.rawbk-modal { background: #fff; border-radius: 4px; padding: 24px 28px; width: min(440px, 90vw); box-shadow: 0 3px 30px rgba(0,0,0,.3); }
+				.rawbk-modal h2 { margin: 0 0 14px; }
+				.rawbk-bar { background: #dcdcde; border-radius: 3px; height: 18px; overflow: hidden; }
+				.rawbk-bar-fill { background: #2271b1; height: 100%; width: 0; border-radius: 3px; transition: width .5s ease;
+					background-image: linear-gradient(45deg, rgba(255,255,255,.18) 25%, transparent 25%, transparent 50%, rgba(255,255,255,.18) 50%, rgba(255,255,255,.18) 75%, transparent 75%);
+					background-size: 24px 24px; animation: rawbk-stripes 1s linear infinite; }
+				@keyframes rawbk-stripes { from { background-position: 0 0; } to { background-position: 24px 0; } }
+				.rawbk-bar-meta { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; font-size: 13px; color: #50575e; }
+				#rawbk-bar-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 			</style>
 
 			<div class="rawbk-card">
 				<h2><?php esc_html_e( 'Export', 'raw-backup' ); ?></h2>
 				<p><?php esc_html_e( 'Creates a ZIP containing meta.json, a credential-free wp-config.php template, a full database dump (sql/) and the wp-content directory.', 'raw-backup' ); ?></p>
-				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" data-rawbk="export">
 					<input type="hidden" name="action" value="rawbk_export" />
+					<input type="hidden" name="rawbk_job" value="" />
 					<?php wp_nonce_field( 'rawbk_export' ); ?>
 					<?php submit_button( __( 'Create backup now', 'raw-backup' ), 'primary', 'submit', false ); ?>
 				</form>
@@ -88,11 +100,12 @@ class Raw_Backup_Admin {
 										<a class="button button-small" href="<?php echo esc_url( self::action_url( 'rawbk_download', $backup['name'] ) ); ?>">
 											<?php esc_html_e( 'Download', 'raw-backup' ); ?>
 										</a>
-										<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"
-											onsubmit="return confirm('<?php echo esc_js( __( 'Import this backup? The database and wp-content of THIS site will be replaced. A safety backup will be created first.', 'raw-backup' ) ); ?>');">
+										<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" data-rawbk="import"
+											data-confirm="<?php echo esc_attr__( 'Import this backup? The database and wp-content of THIS site will be replaced. A safety backup will be created first.', 'raw-backup' ); ?>">
 											<input type="hidden" name="action" value="rawbk_import" />
 											<input type="hidden" name="rawbk_existing" value="<?php echo esc_attr( $backup['name'] ); ?>" />
 											<input type="hidden" name="rawbk_confirm" value="1" />
+											<input type="hidden" name="rawbk_job" value="" />
 											<?php wp_nonce_field( 'rawbk_import' ); ?>
 											<button type="submit" class="button button-small"><?php esc_html_e( 'Import', 'raw-backup' ); ?></button>
 										</form>
@@ -115,8 +128,9 @@ class Raw_Backup_Admin {
 					<strong><?php esc_html_e( 'Warning:', 'raw-backup' ); ?></strong>
 					<?php esc_html_e( 'Importing replaces the database and wp-content of this site. A safety backup of the current site is created automatically first. Your session will end — you will need to log in again with the credentials of the imported site.', 'raw-backup' ); ?>
 				</p>
-				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" enctype="multipart/form-data">
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" enctype="multipart/form-data" data-rawbk="import">
 					<input type="hidden" name="action" value="rawbk_import" />
+					<input type="hidden" name="rawbk_job" value="" />
 					<?php wp_nonce_field( 'rawbk_import' ); ?>
 					<p>
 						<input type="file" name="rawbk_zip" accept=".zip" required />
@@ -139,7 +153,79 @@ class Raw_Backup_Admin {
 					<?php submit_button( __( 'Import backup', 'raw-backup' ), 'primary', 'submit', false ); ?>
 				</form>
 			</div>
+
+			<div id="rawbk-overlay">
+				<div class="rawbk-modal">
+					<h2 id="rawbk-overlay-title"></h2>
+					<div class="rawbk-bar"><div class="rawbk-bar-fill" id="rawbk-bar-fill"></div></div>
+					<div class="rawbk-bar-meta">
+						<span id="rawbk-bar-msg"><?php esc_html_e( 'Starting…', 'raw-backup' ); ?></span>
+						<span id="rawbk-bar-pct">0%</span>
+					</div>
+					<p class="description"><?php esc_html_e( 'Do not close this tab.', 'raw-backup' ); ?></p>
+				</div>
+			</div>
 		</div>
+
+		<script>
+		( function () {
+			var cfg = {
+				ajaxUrl:   <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>,
+				nonce:     <?php echo wp_json_encode( wp_create_nonce( 'rawbk_progress' ) ); ?>,
+				tExport:   <?php echo wp_json_encode( __( 'Creating backup…', 'raw-backup' ) ); ?>,
+				tImport:   <?php echo wp_json_encode( __( 'Importing backup…', 'raw-backup' ) ); ?>,
+				finishing: <?php echo wp_json_encode( __( 'Finishing… (the site is being switched over)', 'raw-backup' ) ); ?>
+			};
+			var fillEl = document.getElementById( 'rawbk-bar-fill' ),
+				msgEl  = document.getElementById( 'rawbk-bar-msg' ),
+				pctEl  = document.getElementById( 'rawbk-bar-pct' ),
+				lastPct = 0, failCount = 0;
+
+			function poll( job ) {
+				var url = cfg.ajaxUrl + '?action=rawbk_progress&nonce=' + encodeURIComponent( cfg.nonce ) +
+					'&job=' + encodeURIComponent( job ) + '&_=' + Date.now();
+				fetch( url, { credentials: 'same-origin' } )
+					.then( function ( res ) {
+						if ( ! res.ok ) { throw new Error( 'http' ); }
+						return res.json();
+					} )
+					.then( function ( data ) {
+						failCount = 0;
+						if ( data && typeof data.percent === 'number' ) {
+							lastPct = Math.max( lastPct, data.percent );
+							fillEl.style.width = lastPct + '%';
+							pctEl.textContent  = Math.round( lastPct ) + '%';
+							if ( data.message ) { msgEl.textContent = data.message; }
+						}
+					} )
+					.catch( function () {
+						// During an import the login session dies near the end;
+						// polls start failing while the server finishes up.
+						failCount++;
+						if ( failCount > 3 && lastPct > 40 ) {
+							msgEl.textContent = cfg.finishing;
+						}
+					} );
+			}
+
+			Array.prototype.forEach.call( document.querySelectorAll( 'form[data-rawbk]' ), function ( form ) {
+				form.addEventListener( 'submit', function ( event ) {
+					var confirmText = form.getAttribute( 'data-confirm' );
+					if ( confirmText && ! window.confirm( confirmText ) ) {
+						event.preventDefault();
+						return;
+					}
+					var job = 'j' + Date.now().toString( 36 ) + Math.random().toString( 36 ).slice( 2, 10 );
+					form.querySelector( 'input[name="rawbk_job"]' ).value = job;
+
+					document.getElementById( 'rawbk-overlay-title' ).textContent =
+						form.getAttribute( 'data-rawbk' ) === 'export' ? cfg.tExport : cfg.tImport;
+					document.getElementById( 'rawbk-overlay' ).style.display = 'flex';
+					window.setInterval( function () { poll( job ); }, 900 );
+				} );
+			} );
+		} )();
+		</script>
 		<?php
 	}
 
@@ -178,11 +264,14 @@ class Raw_Backup_Admin {
 
 	public static function handle_export() {
 		self::guard( 'rawbk_export' );
+		self::begin_progress();
 
 		$result = Raw_Backup_Exporter::run();
 		if ( is_wp_error( $result ) ) {
+			Raw_Backup_Progress::fail( $result->get_error_message() );
 			self::redirect_with_error( $result->get_error_message() );
 		}
+		Raw_Backup_Progress::done( __( 'Backup created.', 'raw-backup' ) );
 		self::redirect( array( 'rawbk' => 'exported', 'f' => basename( $result ) ) );
 	}
 
@@ -209,9 +298,16 @@ class Raw_Backup_Admin {
 			self::redirect_with_error( __( 'No backup file was provided.', 'raw-backup' ) );
 		}
 
+		self::begin_progress();
+
 		// Safety net: back up the current site before overwriting it.
-		$safety = Raw_Backup_Exporter::run( 'pre-import' );
+		$safety = Raw_Backup_Exporter::run(
+			'pre-import',
+			array( 0, 22 ),
+			__( 'Safety backup: ', 'raw-backup' )
+		);
 		if ( is_wp_error( $safety ) ) {
+			Raw_Backup_Progress::fail( $safety->get_error_message() );
 			self::redirect_with_error(
 				sprintf(
 					/* translators: %s: error message */
@@ -221,11 +317,43 @@ class Raw_Backup_Admin {
 			);
 		}
 
-		$result = Raw_Backup_Importer::run( $zip_path );
+		$result = Raw_Backup_Importer::run( $zip_path, array( 22, 100 ) );
+
+		if ( is_wp_error( $result ) ) {
+			Raw_Backup_Progress::fail( $result->get_error_message() );
+		} else {
+			Raw_Backup_Progress::done( __( 'Import complete.', 'raw-backup' ) );
+		}
 
 		// From here on the session may be gone; render the result directly.
 		self::render_result_screen( $result, basename( $safety ), basename( $zip_path ) );
 		exit;
+	}
+
+	/**
+	 * AJAX endpoint polled by the admin page while a job runs.
+	 */
+	public static function handle_progress() {
+		if ( ! current_user_can( self::CAP ) ) {
+			wp_send_json( array(), 403 );
+		}
+		check_ajax_referer( 'rawbk_progress', 'nonce' );
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- verified above.
+		$job  = isset( $_GET['job'] ) ? sanitize_key( wp_unslash( $_GET['job'] ) ) : '';
+		$data = Raw_Backup_Progress::read( $job );
+		wp_send_json( $data ? $data : array() );
+	}
+
+	/**
+	 * Start progress tracking when the submitting form carried a job id.
+	 */
+	private static function begin_progress() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- caller ran check_admin_referer().
+		$job = isset( $_POST['rawbk_job'] ) ? sanitize_key( wp_unslash( $_POST['rawbk_job'] ) ) : '';
+		if ( $job ) {
+			Raw_Backup_Progress::begin( $job );
+		}
 	}
 
 	public static function handle_download() {

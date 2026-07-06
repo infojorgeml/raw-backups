@@ -2,7 +2,7 @@
 /**
  * Plugin Name: RAW Backup
  * Description: Simple site migrations — export and import full-site backups as raw ZIP archives, compatible with the WordPress Studio backup format.
- * Version: 0.1.0
+ * Version: 0.2.0
  * Author: Jorge Muñoz
  * License: GPL-2.0-or-later
  * Text Domain: raw-backup
@@ -14,7 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'RAW_BACKUP_VERSION', '0.1.0' );
+define( 'RAW_BACKUP_VERSION', '0.2.0' );
 define( 'RAW_BACKUP_FILE', __FILE__ );
 define( 'RAW_BACKUP_DIR', plugin_dir_path( __FILE__ ) );
 define( 'RAW_BACKUP_BASENAME', plugin_basename( __FILE__ ) );
@@ -23,6 +23,7 @@ define( 'RAW_BACKUP_BASENAME', plugin_basename( __FILE__ ) );
 // the core classes so exports/imports can be scripted.
 if ( is_admin() || ( defined( 'WP_CLI' ) && WP_CLI ) ) {
 	require_once RAW_BACKUP_DIR . 'includes/functions.php';
+	require_once RAW_BACKUP_DIR . 'includes/class-raw-backup-progress.php';
 	require_once RAW_BACKUP_DIR . 'includes/class-raw-backup-db.php';
 	require_once RAW_BACKUP_DIR . 'includes/class-raw-backup-exporter.php';
 	require_once RAW_BACKUP_DIR . 'includes/class-raw-backup-importer.php';

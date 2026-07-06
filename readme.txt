@@ -4,7 +4,7 @@ Tags: backup, migration, export, import
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.1.0
+Stable tag: 0.2.0
 License: GPLv2 or later
 
 Simple site migrations: export and import full-site backups as raw ZIP archives, compatible with the WordPress Studio backup format.
@@ -34,3 +34,15 @@ Because the format matches Studio's, backups are interchangeable: a ZIP exported
 * Backups are stored in `wp-content/uploads/raw-backup/`, protected from direct access on Apache via `.htaccess`. On nginx, deny access to that path in the server config. Backups contain the full database — treat the files as sensitive.
 * Very large sites may hit PHP time/memory limits; the process raises them where the host allows it.
 * Deactivating or uninstalling the plugin never deletes your backup files.
+
+**Progress reporting**
+
+Exports and imports show a live progress bar. The progress is real, not simulated: the running job writes its state (current table, files added, bytes of SQL processed, compression ratio) to a small file that the page polls once per second. Near the end of an import the login session ends, so the bar switches to a generic "finishing" state until the result screen loads.
+
+== Changelog ==
+
+= 0.2.0 =
+* Real progress bars for export and import (per-table dump progress, per-file copy progress, byte-accurate SQL import progress and libzip compression progress on PHP 8+).
+
+= 0.1.0 =
+* Initial release: raw ZIP export/import in the WordPress Studio backup format, automatic pre-import safety backup, serialized-safe URL rewriting and table prefix normalization.

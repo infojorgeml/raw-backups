@@ -17,16 +17,25 @@ class Raw_Backup_Exporter {
 	/**
 	 * Create a backup ZIP in the backups directory.
 	 *
-	 * @param string $label Optional filename label, e.g. 'pre-import'.
+	 * @param string $label      Optional filename label, e.g. 'pre-import'.
+	 * @param array  $win        Optional progress window array( start, end ).
+	 * @param string $msg_prefix Optional prefix for progress messages.
 	 * @return string|WP_Error Absolute path to the ZIP.
 	 */
-	public static function run( $label = '' ) {
+	public static function run( $label = '', $win = null, $msg_prefix = '' ) {
 		if ( ! class_exists( 'ZipArchive' ) ) {
 			return new WP_Error( 'rawbk_no_zip', 'The PHP zip extension (ZipArchive) is not available.' );
 		}
 
 		@set_time_limit( 0 );
 		wp_raise_memory_limit( 'admin' );
+
+		$win = $win ? $win : array( 0, 100 );
+		Raw_Backup_Progress::update(
+			Raw_Backup_Progress::scale( $win, 1 ),
+			$msg_prefix . __( 'Preparing backup…', 'raw-backup' ),
+			true
+		);
 
 		$timestamp = wp_date( 'Y-m-d-H-i-s' );
 		$slug      = sanitize_title( get_bloginfo( 'name' ) );
@@ -50,7 +59,11 @@ class Raw_Backup_Exporter {
 		file_put_contents( $staging . '/wp-config.php', self::wp_config_template() );
 
 		$sql_file = $staging . "/sql/studio-backup-db-export-{$timestamp}.sql";
-		$dumped   = Raw_Backup_DB::dump_to_file( $sql_file );
+		$dumped   = Raw_Backup_DB::dump_to_file(
+			$sql_file,
+			array( Raw_Backup_Progress::scale( $win, 3 ), Raw_Backup_Progress::scale( $win, 38 ) ),
+			$msg_prefix
+		);
 		if ( is_wp_error( $dumped ) ) {
 			rawbk_rrmdir( $staging );
 			return $dumped;
@@ -67,7 +80,11 @@ class Raw_Backup_Exporter {
 		$zip->addFile( $staging . '/wp-config.php', 'wp-config.php' );
 		$zip->addFile( $sql_file, 'sql/' . basename( $sql_file ) );
 
-		$added = self::add_wp_content( $zip );
+		$added = self::add_wp_content(
+			$zip,
+			array( Raw_Backup_Progress::scale( $win, 38 ), Raw_Backup_Progress::scale( $win, 45 ) ),
+			$msg_prefix
+		);
 		if ( is_wp_error( $added ) ) {
 			$zip->close();
 			@unlink( $zip_path );
@@ -75,11 +92,33 @@ class Raw_Backup_Exporter {
 			return $added;
 		}
 
+		// Compression happens inside close(); report it for real where the
+		// libzip progress callback is available (PHP 8.0+).
+		$compress_msg = $msg_prefix . __( 'Compressing archive…', 'raw-backup' );
+		if ( method_exists( $zip, 'registerProgressCallback' ) ) {
+			$zip->registerProgressCallback(
+				0.005,
+				function ( $ratio ) use ( $win, $compress_msg ) {
+					Raw_Backup_Progress::update(
+						Raw_Backup_Progress::scale( $win, 45 + 53 * $ratio ),
+						$compress_msg
+					);
+				}
+			);
+		} else {
+			Raw_Backup_Progress::update( Raw_Backup_Progress::scale( $win, 60 ), $compress_msg, true );
+		}
+
 		if ( ! $zip->close() ) {
 			rawbk_rrmdir( $staging );
 			return new WP_Error( 'rawbk_zip_close', 'Could not finalize the ZIP file.' );
 		}
 		rawbk_rrmdir( $staging );
+		Raw_Backup_Progress::update(
+			Raw_Backup_Progress::scale( $win, 99 ),
+			$msg_prefix . __( 'Backup file created.', 'raw-backup' ),
+			true
+		);
 
 		return $zip_path;
 	}
@@ -88,10 +127,12 @@ class Raw_Backup_Exporter {
 	 * Add the live wp-content tree to the ZIP, skipping environment-specific
 	 * and self-referential paths.
 	 *
-	 * @param ZipArchive $zip Open archive.
+	 * @param ZipArchive $zip        Open archive.
+	 * @param array      $win        Optional progress window array( start, end ).
+	 * @param string     $msg_prefix Optional prefix for progress messages.
 	 * @return true|WP_Error
 	 */
-	private static function add_wp_content( ZipArchive $zip ) {
+	private static function add_wp_content( ZipArchive $zip, $win = null, $msg_prefix = '' ) {
 		$content_dir = untrailingslashit( WP_CONTENT_DIR );
 
 		$excluded_dirs = array(
@@ -127,13 +168,47 @@ class Raw_Backup_Exporter {
 			RecursiveIteratorIterator::SELF_FIRST
 		);
 
+		if ( $win ) {
+			Raw_Backup_Progress::update(
+				Raw_Backup_Progress::scale( $win, 0 ),
+				$msg_prefix . __( 'Collecting files…', 'raw-backup' ),
+				true
+			);
+		}
+
 		$base_len = strlen( $content_dir ) + 1;
+		$dirs     = array();
+		$files    = array();
 		foreach ( $iterator as $item ) {
 			$relative = 'wp-content/' . substr( $item->getPathname(), $base_len );
 			if ( $item->isDir() ) {
-				$zip->addEmptyDir( $relative );
-			} elseif ( ! $zip->addFile( $item->getPathname(), $relative ) ) {
+				$dirs[] = $relative;
+			} else {
+				$files[ $item->getPathname() ] = $relative;
+			}
+		}
+
+		foreach ( $dirs as $relative ) {
+			$zip->addEmptyDir( $relative );
+		}
+
+		$total = max( 1, count( $files ) );
+		$done  = 0;
+		foreach ( $files as $path => $relative ) {
+			if ( ! $zip->addFile( $path, $relative ) ) {
 				return new WP_Error( 'rawbk_zip_add', sprintf( 'Could not add file to ZIP: %s', $relative ) );
+			}
+			$done++;
+			if ( $win && 0 === $done % 200 ) {
+				Raw_Backup_Progress::update(
+					Raw_Backup_Progress::scale( $win, 100 * $done / $total ),
+					$msg_prefix . sprintf(
+						/* translators: 1: files added, 2: total files */
+						__( 'Adding files (%1$s of %2$s)…', 'raw-backup' ),
+						number_format_i18n( $done ),
+						number_format_i18n( $total )
+					)
+				);
 			}
 		}
 
