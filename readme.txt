@@ -1,0 +1,36 @@
+=== RAW Backup ===
+Contributors: jorgemunoz
+Tags: backup, migration, export, import
+Requires at least: 6.0
+Tested up to: 7.0
+Requires PHP: 7.4
+Stable tag: 0.1.0
+License: GPLv2 or later
+
+Simple site migrations: export and import full-site backups as raw ZIP archives, compatible with the WordPress Studio backup format.
+
+== Description ==
+
+RAW Backup creates and restores full-site backups in the same raw layout WordPress Studio uses for its local exports:
+
+* `meta.json` — site URL, PHP/WP versions, plugin and theme inventory.
+* `wp-config.php` — credential-free template (real credentials and salts are never exported).
+* `sql/` — full database dump (DROP + CREATE + INSERT), table prefix normalized to `wp_`.
+* `wp-content/` — plugins, themes, uploads and everything else in wp-content.
+
+Because the format matches Studio's, backups are interchangeable: a ZIP exported here can be dragged into WordPress Studio, and a Studio export can be imported here.
+
+**Import behavior**
+
+* A safety backup of the current site is created automatically before every import.
+* `wp-content` is merged over the existing one (existing extra plugins/themes are kept but will be inactive if the imported database does not list them).
+* The database is replaced, then source URLs are rewritten to this site's URLs (serialized data handled safely).
+* Environment-specific files are never touched: drop-ins (`db.php`, `object-cache.php`, `advanced-cache.php`), Studio's SQLite `database/` directory and this plugin itself.
+* After a database import your login session ends — log in again with the credentials of the imported site.
+
+**Notes and limits**
+
+* Single-site installs only (multisite is not supported).
+* Backups are stored in `wp-content/uploads/raw-backup/`, protected from direct access on Apache via `.htaccess`. On nginx, deny access to that path in the server config. Backups contain the full database — treat the files as sensitive.
+* Very large sites may hit PHP time/memory limits; the process raises them where the host allows it.
+* Deactivating or uninstalling the plugin never deletes your backup files.
