@@ -31,6 +31,46 @@ function rawbk_backups_dir() {
 }
 
 /**
+ * How many backups to keep (0 = unlimited).
+ *
+ * @return int
+ */
+function rawbk_retention_limit() {
+	return max( 0, min( 100, (int) get_option( 'rawbk_keep_backups', 5 ) ) );
+}
+
+/**
+ * Delete the oldest backup ZIPs beyond the retention limit.
+ *
+ * @param string[] $protect Absolute paths that must never be deleted in
+ *                          this pass (e.g. the ZIP being imported).
+ * @return string[] Basenames of the deleted files.
+ */
+function rawbk_apply_retention( $protect = array() ) {
+	$keep = rawbk_retention_limit();
+	if ( $keep < 1 ) {
+		return array();
+	}
+
+	$zips = glob( rawbk_backups_dir() . '/*.zip' ) ?: array();
+	$zips = array_values( array_diff( $zips, $protect ) );
+	usort(
+		$zips,
+		function ( $a, $b ) {
+			return filemtime( $b ) <=> filemtime( $a );
+		}
+	);
+
+	$deleted = array();
+	foreach ( array_slice( $zips, $keep ) as $old ) {
+		if ( @unlink( $old ) ) {
+			$deleted[] = basename( $old );
+		}
+	}
+	return $deleted;
+}
+
+/**
  * Recursively delete a directory.
  *
  * @param string $dir Absolute path.

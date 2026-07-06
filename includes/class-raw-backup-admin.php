@@ -18,6 +18,7 @@ class Raw_Backup_Admin {
 		add_action( 'admin_post_rawbk_import', array( __CLASS__, 'handle_import' ) );
 		add_action( 'admin_post_rawbk_download', array( __CLASS__, 'handle_download' ) );
 		add_action( 'admin_post_rawbk_delete', array( __CLASS__, 'handle_delete' ) );
+		add_action( 'admin_post_rawbk_settings', array( __CLASS__, 'handle_settings' ) );
 		add_action( 'wp_ajax_rawbk_progress', array( __CLASS__, 'handle_progress' ) );
 	}
 
@@ -53,6 +54,9 @@ class Raw_Backup_Admin {
 				.rawbk-warning { color: #b32d2e; }
 				.rawbk-actions form { display: inline; }
 				.rawbk-table td, .rawbk-table th { vertical-align: middle; }
+				.rawbk-retention { margin: 0 0 14px; padding-bottom: 12px; border-bottom: 1px solid #f0f0f1; }
+				.rawbk-retention label { margin-right: 8px; }
+				.rawbk-retention .description { margin-top: 6px; }
 				#rawbk-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 100000; align-items: center; justify-content: center; }
 				.rawbk-modal { background: #fff; border-radius: 4px; padding: 24px 28px; width: min(440px, 90vw); box-shadow: 0 3px 30px rgba(0,0,0,.3); }
 				.rawbk-modal h2 { margin: 0 0 14px; }
@@ -78,6 +82,18 @@ class Raw_Backup_Admin {
 
 			<div class="rawbk-card">
 				<h2><?php esc_html_e( 'Backups', 'raw-backup' ); ?></h2>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="rawbk-retention">
+					<input type="hidden" name="action" value="rawbk_settings" />
+					<?php wp_nonce_field( 'rawbk_settings' ); ?>
+					<label>
+						<?php esc_html_e( 'Keep only the last', 'raw-backup' ); ?>
+						<input type="number" name="rawbk_keep" min="0" max="100" step="1"
+							value="<?php echo esc_attr( rawbk_retention_limit() ); ?>" style="width:70px;" />
+						<?php esc_html_e( 'backups', 'raw-backup' ); ?>
+					</label>
+					<?php submit_button( __( 'Save', 'raw-backup' ), 'small', 'submit', false ); ?>
+					<p class="description"><?php esc_html_e( 'Older backups are deleted automatically when a new one is created. Use 0 to keep everything. The file being imported is never deleted.', 'raw-backup' ); ?></p>
+				</form>
 				<?php if ( empty( $backups ) ) : ?>
 					<p><?php esc_html_e( 'No backups yet.', 'raw-backup' ); ?></p>
 				<?php else : ?>
@@ -170,16 +186,25 @@ class Raw_Backup_Admin {
 		<script>
 		( function () {
 			var cfg = {
-				ajaxUrl:   <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>,
-				nonce:     <?php echo wp_json_encode( wp_create_nonce( 'rawbk_progress' ) ); ?>,
-				tExport:   <?php echo wp_json_encode( __( 'Creating backup…', 'raw-backup' ) ); ?>,
-				tImport:   <?php echo wp_json_encode( __( 'Importing backup…', 'raw-backup' ) ); ?>,
-				finishing: <?php echo wp_json_encode( __( 'Finishing… (the site is being switched over)', 'raw-backup' ) ); ?>
+				ajaxUrl:    <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>,
+				nonce:      <?php echo wp_json_encode( wp_create_nonce( 'rawbk_progress' ) ); ?>,
+				tExport:    <?php echo wp_json_encode( __( 'Creating backup…', 'raw-backup' ) ); ?>,
+				tImport:    <?php echo wp_json_encode( __( 'Importing backup…', 'raw-backup' ) ); ?>,
+				finishing:  <?php echo wp_json_encode( __( 'Finishing… (the site is being switched over)', 'raw-backup' ) ); ?>,
+				uploading:  <?php echo wp_json_encode( __( 'Uploading file… (%1$s MB of %2$s MB)', 'raw-backup' ) ); ?>,
+				uploadFail: <?php echo wp_json_encode( __( 'Upload failed. Check your connection and try again.', 'raw-backup' ) ); ?>
 			};
 			var fillEl = document.getElementById( 'rawbk-bar-fill' ),
 				msgEl  = document.getElementById( 'rawbk-bar-msg' ),
 				pctEl  = document.getElementById( 'rawbk-bar-pct' ),
-				lastPct = 0, failCount = 0;
+				lastPct = 0, failCount = 0, pollBase = 0, pollSpan = 100, pollTimer = null;
+
+			function setBar( percent, message ) {
+				lastPct = Math.max( lastPct, Math.min( 100, percent ) );
+				fillEl.style.width = lastPct + '%';
+				pctEl.textContent  = Math.round( lastPct ) + '%';
+				if ( message ) { msgEl.textContent = message; }
+			}
 
 			function poll( job ) {
 				var url = cfg.ajaxUrl + '?action=rawbk_progress&nonce=' + encodeURIComponent( cfg.nonce ) +
@@ -192,10 +217,7 @@ class Raw_Backup_Admin {
 					.then( function ( data ) {
 						failCount = 0;
 						if ( data && typeof data.percent === 'number' ) {
-							lastPct = Math.max( lastPct, data.percent );
-							fillEl.style.width = lastPct + '%';
-							pctEl.textContent  = Math.round( lastPct ) + '%';
-							if ( data.message ) { msgEl.textContent = data.message; }
+							setBar( pollBase + data.percent * pollSpan / 100, data.message || null );
 						}
 					} )
 					.catch( function () {
@@ -206,6 +228,10 @@ class Raw_Backup_Admin {
 							msgEl.textContent = cfg.finishing;
 						}
 					} );
+			}
+
+			function startPolling( job ) {
+				pollTimer = window.setInterval( function () { poll( job ); }, 900 );
 			}
 
 			Array.prototype.forEach.call( document.querySelectorAll( 'form[data-rawbk]' ), function ( form ) {
@@ -221,7 +247,47 @@ class Raw_Backup_Admin {
 					document.getElementById( 'rawbk-overlay-title' ).textContent =
 						form.getAttribute( 'data-rawbk' ) === 'export' ? cfg.tExport : cfg.tImport;
 					document.getElementById( 'rawbk-overlay' ).style.display = 'flex';
-					window.setInterval( function () { poll( job ); }, 900 );
+
+					var fileInput = form.querySelector( 'input[type="file"][name="rawbk_zip"]' );
+					var useXhr    = fileInput && fileInput.files && fileInput.files.length &&
+						window.FormData && window.XMLHttpRequest;
+
+					if ( ! useXhr ) {
+						startPolling( job );
+						return; // Normal navigation submit.
+					}
+
+					// Upload via XHR so the upload itself has real progress:
+					// upload maps to 0–30% of the bar, server work to 30–100%.
+					event.preventDefault();
+					pollBase = 30;
+					pollSpan = 70;
+
+					var xhr = new XMLHttpRequest();
+					xhr.open( 'POST', form.action );
+					xhr.upload.onprogress = function ( ev ) {
+						if ( ev.lengthComputable ) {
+							var mb = function ( n ) { return ( n / 1048576 ).toFixed( 1 ); };
+							setBar(
+								30 * ev.loaded / ev.total,
+								cfg.uploading.replace( '%1$s', mb( ev.loaded ) ).replace( '%2$s', mb( ev.total ) )
+							);
+						}
+					};
+					xhr.onload = function () {
+						// The response is the final result screen (or an error
+						// page); swap the document for it, like a navigation.
+						if ( pollTimer ) { window.clearInterval( pollTimer ); }
+						document.open();
+						document.write( xhr.responseText );
+						document.close();
+					};
+					xhr.onerror = function () {
+						if ( pollTimer ) { window.clearInterval( pollTimer ); }
+						msgEl.textContent = cfg.uploadFail;
+					};
+					xhr.send( new FormData( form ) );
+					startPolling( job );
 				} );
 			} );
 		} )();
@@ -235,16 +301,23 @@ class Raw_Backup_Admin {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$file = isset( $_GET['f'] ) ? sanitize_file_name( wp_unslash( $_GET['f'] ) ) : '';
 
-		if ( 'exported' === $code ) {
+		if ( 'exported' === $code && $file ) {
 			printf(
-				'<div class="notice notice-success is-dismissible"><p>%s <code>%s</code></p></div>',
+				'<div class="notice notice-success is-dismissible"><p>%s <code>%s</code> <a class="button button-small" href="%s">%s</a></p></div>',
 				esc_html__( 'Backup created:', 'raw-backup' ),
-				esc_html( $file )
+				esc_html( $file ),
+				esc_url( self::action_url( 'rawbk_download', $file ) ),
+				esc_html__( 'Download', 'raw-backup' )
 			);
 		} elseif ( 'deleted' === $code ) {
 			printf(
 				'<div class="notice notice-success is-dismissible"><p>%s</p></div>',
 				esc_html__( 'Backup deleted.', 'raw-backup' )
+			);
+		} elseif ( 'settings' === $code ) {
+			printf(
+				'<div class="notice notice-success is-dismissible"><p>%s</p></div>',
+				esc_html__( 'Settings saved.', 'raw-backup' )
 			);
 		}
 
@@ -271,8 +344,18 @@ class Raw_Backup_Admin {
 			Raw_Backup_Progress::fail( $result->get_error_message() );
 			self::redirect_with_error( $result->get_error_message() );
 		}
+		rawbk_apply_retention();
 		Raw_Backup_Progress::done( __( 'Backup created.', 'raw-backup' ) );
 		self::redirect( array( 'rawbk' => 'exported', 'f' => basename( $result ) ) );
+	}
+
+	public static function handle_settings() {
+		self::guard( 'rawbk_settings' );
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- guard() ran check_admin_referer().
+		$keep = isset( $_POST['rawbk_keep'] ) ? absint( wp_unslash( $_POST['rawbk_keep'] ) ) : 5;
+		update_option( 'rawbk_keep_backups', min( 100, $keep ) );
+		self::redirect( array( 'rawbk' => 'settings' ) );
 	}
 
 	public static function handle_import() {
@@ -322,6 +405,8 @@ class Raw_Backup_Admin {
 		if ( is_wp_error( $result ) ) {
 			Raw_Backup_Progress::fail( $result->get_error_message() );
 		} else {
+			// Never delete the ZIP we just imported, whatever its age.
+			rawbk_apply_retention( array( $zip_path ) );
 			Raw_Backup_Progress::done( __( 'Import complete.', 'raw-backup' ) );
 		}
 
