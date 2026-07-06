@@ -293,6 +293,39 @@ class Raw_Backup_DB {
 	}
 
 	/**
+	 * Refresh table statistics after an import. MySQL 8 caches table stats
+	 * for up to 24h (information_schema_stats_expiry), so freshly imported
+	 * tables show "0 B" sizes in tools like phpMyAdmin until ANALYZE runs.
+	 * Failures are ignored — statistics are a nice-to-have.
+	 */
+	public static function analyze_tables() {
+		global $wpdb;
+
+		$prefix = $wpdb->prefix;
+		$tables = array_values(
+			array_filter(
+				(array) $wpdb->get_col( 'SHOW TABLES' ),
+				function ( $table ) use ( $prefix ) {
+					return 0 === strpos( $table, $prefix );
+				}
+			)
+		);
+		if ( empty( $tables ) ) {
+			return;
+		}
+
+		$suppress = $wpdb->suppress_errors( true );
+		// One statement for all tables; fall back to per-table on failure.
+		$list = '`' . implode( '`, `', $tables ) . '`';
+		if ( false === $wpdb->query( "ANALYZE TABLE {$list}" ) ) {
+			foreach ( $tables as $table ) {
+				$wpdb->query( "ANALYZE TABLE `{$table}`" );
+			}
+		}
+		$wpdb->suppress_errors( $suppress );
+	}
+
+	/**
 	 * Serialized-data-safe search & replace across all text columns of the
 	 * current-prefix tables. Returns the number of updated rows.
 	 *

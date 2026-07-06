@@ -4,7 +4,7 @@ Tags: backup, migration, export, import
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.2.0
+Stable tag: 0.2.1
 License: GPLv2 or later
 
 Simple site migrations: export and import full-site backups as raw ZIP archives, compatible with the WordPress Studio backup format.
@@ -40,6 +40,9 @@ Because the format matches Studio's, backups are interchangeable: a ZIP exported
 Exports and imports show a live progress bar. The progress is real, not simulated: the running job writes its state (current table, files added, bytes of SQL processed, compression ratio) to a small file that the page polls once per second. Near the end of an import the login session ends, so the bar switches to a generic "finishing" state until the result screen loads.
 
 == Changelog ==
+
+= 0.2.1 =
+* Run ANALYZE TABLE on all tables after an import so database tools (e.g. phpMyAdmin on MySQL 8, which caches statistics for 24h) show real table sizes and row counts immediately.
 
 = 0.2.0 =
 * Real progress bars for export and import (per-table dump progress, per-file copy progress, byte-accurate SQL import progress and libzip compression progress on PHP 8+).

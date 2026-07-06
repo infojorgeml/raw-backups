@@ -168,6 +168,15 @@ class Raw_Backup_Importer {
 			$wpdb->query( $wpdb->prepare( "UPDATE `{$options_table}` SET option_value = %s WHERE option_name = 'siteurl'", $target_siteurl ) );
 			$wpdb->query( "DELETE FROM `{$options_table}` WHERE option_name = 'rewrite_rules'" );
 
+			// Refresh stats so DB tools show real sizes right away (MySQL 8
+			// caches them for 24h otherwise).
+			Raw_Backup_Progress::update(
+				Raw_Backup_Progress::scale( $win, 98 ),
+				__( 'Refreshing table statistics…', 'raw-backup' ),
+				true
+			);
+			Raw_Backup_DB::analyze_tables();
+
 			wp_cache_flush();
 		}
 
