@@ -264,7 +264,10 @@ class Raw_Backup_Admin {
 					pollSpan = 70;
 
 					var xhr = new XMLHttpRequest();
-					xhr.open( 'POST', form.action );
+					// NOT form.action: the hidden input named "action" that
+					// admin-post.php requires shadows the form's action
+					// property and would coerce to "[object HTMLInputElement]".
+					xhr.open( 'POST', form.getAttribute( 'action' ) );
 					xhr.upload.onprogress = function ( ev ) {
 						if ( ev.lengthComputable ) {
 							var mb = function ( n ) { return ( n / 1048576 ).toFixed( 1 ); };
@@ -275,9 +278,13 @@ class Raw_Backup_Admin {
 						}
 					};
 					xhr.onload = function () {
+						if ( pollTimer ) { window.clearInterval( pollTimer ); }
+						if ( xhr.status < 200 || xhr.status >= 400 ) {
+							msgEl.textContent = cfg.uploadFail + ' (HTTP ' + xhr.status + ')';
+							return;
+						}
 						// The response is the final result screen (or an error
 						// page); swap the document for it, like a navigation.
-						if ( pollTimer ) { window.clearInterval( pollTimer ); }
 						document.open();
 						document.write( xhr.responseText );
 						document.close();
