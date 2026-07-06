@@ -4,7 +4,7 @@ Tags: backup, migration, export, import
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.3.1
+Stable tag: 0.3.2
 License: GPLv2 or later
 
 Simple site migrations: export and import full-site backups as raw ZIP archives, compatible with the WordPress Studio backup format.
@@ -51,6 +51,9 @@ Only the most recent backups are kept (5 by default, configurable on the RAW Bac
 The CLI path has no PHP request timeouts, so prefer it for very large sites and automation.
 
 == Changelog ==
+
+= 0.3.2 =
+* The RAW Backup screen now states which database the site actually uses (SQLite file vs MySQL/MariaDB host + database name + table prefix), so imported data is never hunted for in the wrong server.
 
 = 0.3.1 =
 * Fix: uploaded imports broke in 0.3.0 — the XHR upload posted to "[object HTMLInputElement]" because the hidden `action` input required by admin-post.php shadows the form's `action` property in JavaScript. The upload URL is now read with `getAttribute()`, and HTTP errors during upload show a message instead of a broken page.

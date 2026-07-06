@@ -47,6 +47,7 @@ class Raw_Backup_Admin {
 		<div class="wrap">
 			<h1><?php esc_html_e( 'RAW Backup', 'raw-backup' ); ?></h1>
 			<p><?php esc_html_e( 'Export and import full-site backups (database + wp-content) as raw ZIP archives, compatible with the WordPress Studio backup format.', 'raw-backup' ); ?></p>
+			<p class="description"><?php echo esc_html( self::db_environment() ); ?></p>
 
 			<style>
 				.rawbk-card { background: #fff; border: 1px solid #c3c4c7; box-shadow: 0 1px 1px rgba(0,0,0,.04); padding: 16px 20px 20px; margin-top: 16px; max-width: 900px; }
@@ -486,6 +487,38 @@ class Raw_Backup_Admin {
 	/* ---------------------------------------------------------------------
 	 * Helpers
 	 * ------------------------------------------------------------------ */
+
+	/**
+	 * One-line description of the database this site actually uses, so
+	 * nobody hunts for imported data in the wrong server (e.g. a local
+	 * MySQL while the site runs on Studio's SQLite).
+	 */
+	private static function db_environment() {
+		global $wpdb;
+
+		$is_sqlite = ( defined( 'DB_ENGINE' ) && 'sqlite' === DB_ENGINE )
+			|| false !== stripos( get_class( $wpdb ), 'sqlite' );
+
+		if ( $is_sqlite ) {
+			$location = defined( 'FQDB' )
+				? ltrim( str_replace( untrailingslashit( ABSPATH ), '', FQDB ), '/' )
+				: 'wp-content/database/';
+			return sprintf(
+				/* translators: 1: SQLite file path, 2: table prefix */
+				__( 'This site runs on SQLite (%1$s) — it does not use MySQL. Table prefix: %2$s', 'raw-backup' ),
+				$location,
+				$wpdb->prefix
+			);
+		}
+
+		return sprintf(
+			/* translators: 1: database name, 2: database host, 3: table prefix */
+			__( 'Database: “%1$s” at %2$s (MySQL/MariaDB). Table prefix: %3$s', 'raw-backup' ),
+			defined( 'DB_NAME' ) ? DB_NAME : '?',
+			defined( 'DB_HOST' ) ? DB_HOST : '?',
+			$wpdb->prefix
+		);
+	}
 
 	private static function guard( $action ) {
 		if ( ! current_user_can( self::CAP ) ) {
